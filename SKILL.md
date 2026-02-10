@@ -327,6 +327,7 @@ Content-Type: application/json
 | `deleteBlock` 對 doc 無效 | 刪文件只能用 `removeDoc` / `removeDocs` |
 | 標籤缺少結尾 `#` | 寫入時確保 `#標籤名#` 格式完整 |
 | mcporter stdio 偶爾卡住 | 直接用 REST API 更穩定 |
+| `setNotebookIcon` 要用 hex code | 用 `1f4bc`（💼）不是 emoji 字元，跟用戶指南格式一致 |
 
 ---
 

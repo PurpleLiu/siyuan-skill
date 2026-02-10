@@ -1,410 +1,387 @@
 ---
 name: siyuan-skill
-description: OpenClaw workflows for SiYuan Note via the siyuan MCP server (mcporter).
-homepage: https://github.com/PurpleLiu/siyuan-mcp
+description: 思源筆記（SiYuan）核心概念與最佳實踐。內容塊、引用、標籤、屬性、SQL 查詢、API 操作指南。
+homepage: https://github.com/siyuan-note/siyuan
 metadata:
   {
     "openclaw": {
-      "emoji": "📔",
-      "requires": { "env": ["SIYUAN_TOKEN", "SIYUAN_BASE_URL"] },
-      "primaryEnv": "SIYUAN_TOKEN"
+      "emoji": "📔"
     }
   }
 ---
 
-# 思源筆記（SiYuan）Skill（for OpenClaw）
+# 思源筆記（SiYuan）— 核心知識與最佳實踐
 
-本 Skill 的目標是把「思源筆記 MCP tools」組織成**穩定、可重複使用**的工作流（workflow）。
-
-- **MCP** 負責提供工具（tools）
-- **Skill** 負責告訴 OpenClaw：在什麼情境用哪些 tools、怎麼組合、怎麼把結果寫回筆記
-
-> 原則：MCP 與 Skill 分離（最小耦合）。Skill 不描述 MCP 內部實作，只描述「怎麼用」。
+本 Skill 是思源筆記的知識庫，教 AI 怎麼「用好」思源的特色功能。
+不包含個人歸檔規則（那是 note-flow 的職責）。
 
 ---
 
-## 0) 先決條件（Setup）
+## 1) 核心概念：內容塊（Content Block）
 
-1) 準備 token/baseUrl：
+思源的唯一核心概念是**內容塊**。所有內容都是塊，文件本身也是塊。
 
-```bash
-export SIYUAN_TOKEN="your_token_here"
-export SIYUAN_BASE_URL="http://127.0.0.1:6806"
-```
+### 塊的類型
 
-2) mcporter 需設定一個名為 `siyuan` 的 MCP server：
+| 類型 | 說明 | type 值 |
+|---|---|---|
+| 文件塊 | 一份文件就是一個塊，有自己的 ID | `d` |
+| 標題塊 | `#` ~ `######` | `h` |
+| 段落塊 | 普通文字 | `p` |
+| 列表塊 | 有序/無序/任務列表 | `l` |
+| 列表項 | 列表中的每一項 | `i` |
+| 引述塊 | `>` blockquote | `b` |
+| 代碼塊 | ``` code ``` | `c` |
+| 表格塊 | Markdown 表格 | `t` |
+| 超級塊 | 橫向/縱向排版容器 | `s` |
+| 嵌入塊 | `{{ SQL }}` 動態查詢嵌入 | `query_embed` |
+| 數學公式 | LaTeX | `m` |
+| 分隔線 | `---` | `tb` |
 
-```bash
-mcporter config add siyuan \
-  --command "siyuan-mcp stdio --token $SIYUAN_TOKEN --baseUrl $SIYUAN_BASE_URL"
-```
+### 關鍵原則
 
-3) 呼叫方式：
-
-```bash
-mcporter call siyuan.<tool_name> key=value
-```
-
-列出工具與參數：
-
-```bash
-mcporter list siyuan --all-parameters
-```
-
----
-
-## 1) 預設設定（本環境）
-
-- **Daily Note 筆記本**：`Daily Note`
-- **Daily Note notebook_id**：`20260205161632-m9mibni`
-- **收集策略（Inbox）**：所有快速記錄一律先寫進 Daily Note（純 Markdown）
-- **TODO 格式**：Markdown checkbox
-  - 未完成：`- [ ] ...`
-  - 已完成：`- [x] ...`
+- **文件也是塊** — 每個 `.sy` 文件有一個 block ID，就是文件 ID
+- **塊可互轉** — 標題可轉段落、列表項可轉段落等
+- **塊有屬性** — 每個塊都有 `id`、`updated`、`type`，可附加自訂屬性
+- **塊級粒度** — 引用、嵌入、標籤都在塊級別操作
 
 ---
 
-## 2) 核心工作流（MVP）
+## 2) 引用與雙向連結
 
-### Workflow A：快速記錄（寫進今日 Daily Note）
+思源最強大的功能。建立引用後，自動產生正向連結和反向連結。
 
-適用：你說「幫我記一下…」「快速記錄…」「備忘…」
-
-工具鏈：`append_to_daily_note`
-
-```bash
-mcporter call siyuan.append_to_daily_note \
-  notebook_id="20260205161632-m9mibni" \
-  content="- 2026-02-05 16:30 這是一則快速記錄"
-```
-
-### Workflow B：新增待辦（checkbox，寫進今日 Daily Note）
-
-適用：你說「提醒我…」「TODO…」「待辦…」
-
-工具鏈：`append_to_daily_note`
-
-```bash
-mcporter call siyuan.append_to_daily_note \
-  notebook_id="20260205161632-m9mibni" \
-  content="- [ ] 明天買電池"
-```
-
-### Workflow C：列出近 N 天未完成待辦（Daily Note 範圍）
-
-適用：你說「我有哪些還沒做完？」「列出未完成待辦」
-
-工具鏈：`list_daily_note_todos`
-
-```bash
-mcporter call siyuan.list_daily_note_todos \
-  notebook_id="20260205161632-m9mibni" \
-  days=7
-```
-
-預期回傳（示意）：
-
-```json
-[
-  {
-    "text": "明天買電池",
-    "done": false,
-    "date": "2026-02-05",
-    "document_id": "...",
-    "line_no": 12
-  }
-]
-```
-
-### Workflow D：搜尋筆記（關鍵字/標籤/檔名）
-
-適用：你說「幫我找…」「搜尋…」
-
-工具鏈：`unified_search` →（必要時）`get_document_content`
-
-```bash
-# 內容搜尋
-mcporter call siyuan.unified_search content="kubernetes" limit=10
-
-# 檔名搜尋
-mcporter call siyuan.unified_search filename="週報" limit=10
-
-# 標籤搜尋（不含 #）
-mcporter call siyuan.unified_search tag="project" limit=10
-```
-
-### Workflow E：整理今天（把 Daily Note 分區、列待辦、產出歸檔候選）
-
-適用：你說「整理今天」「幫我整理今日筆記」
-
-目標（MVP）：
-- 不改變你原本寫法太多（**純 Markdown**）
-- 把內容整理成固定區塊：Inbox / TODO / 今日整理（摘要、重點、可歸檔）
-- 可歸檔項目**先列候選**，不自動搬移（符合最小原則）
-
-建議工具鏈（可靠版本）：
-1) 定位/建立今日 Daily Note：
-- 讀取筆記本 dailyNoteSavePath（可選）
-- 用預設路徑（或依 notebook 設定）找到今天的 hpath
-- `get_ids_by_hpath` → 若不存在可用 `create_document` 建立
-
-2) 讀取今日內容：
-- `get_document_content(document_id)`
-
-3) 列出未完成 TODO（近 1 天即可）：
-- `list_daily_note_todos(notebook_id, days=1)`
-
-4) 產出整理段落並寫回：
-- `append_to_document(document_id, content)`
-
-範例（找到今日文件後）：
-
-```bash
-mcporter call siyuan.list_daily_note_todos \
-  notebook_id="20260205161632-m9mibni" \
-  days=1
-
-mcporter call siyuan.append_to_document \
-  document_id="<today_document_id>" \
-  content="\n\n## 今日整理（AI）\n\n- 摘要：...\n- 重點：...\n- 未完成 TODO：...\n- 可歸檔（候選）：...\n"
-```
-
-### Workflow F：產出週報（先產生 Markdown，再決定是否寫回）
-
-適用：你說「幫我產出本週週報」
-
-建議流程（最小版本）：
-1. 先用 `list_daily_note_todos` 拉出本週未完成項目
-2. 再用搜尋/最近更新/讀取內容補充「本週完成事項」素材
-3. 由 Agent 產出一份純 Markdown（此階段可先不自動寫回，避免誤寫）
-
-> 週報自動寫回（create_document）放在 M2 里程碑後再固定模板。
-
----
-
-## 3) 寫回與整理（後續擴充方向，非 MVP）
-
-當核心穩定後，再逐步加入：
-- Inbox → 分類 → 歸檔（建立固定資料夾與規則）
-- 去重（找相似筆記、合併段落、建立索引頁）
-- 引導使用思源屬性/模板/標籤（讓 AI 自動補齊）
-
----
-
-## 4) 筆記整理規範
-
-### 連結格式
-
-思源內部連結使用以下格式，點擊可直接跳轉：
+### 引用內容塊語法
 
 ```markdown
-[顯示名稱](siyuan://blocks/文件ID)
+((<block_id> '動態錨文字'))    ← 單引號：錨文字隨原文變化（推薦）
+((<block_id> "靜態錨文字"))    ← 雙引號：錨文字固定不變
 ```
 
-範例：
+### 連結方向
+
+| 方向 | 說明 | 價值 |
+|---|---|---|
+| **正向連結** | 當前塊引用了哪些塊 | 直接可見 |
+| **反向連結** | 當前塊被哪些塊引用 | 更有價值 — 發現意外關聯 |
+
+### 關係圖
+
+引用會在**關係圖**中可視化，可以看到塊之間的網絡關係。
+- 全域關係圖：所有筆記的關聯網絡
+- 局部關係圖：以某個塊為中心的關聯
+
+### 最佳實踐
+
+| 原則 | 說明 |
+|---|---|
+| **優先用引用** | 需要建立關聯時，用 `(())` 而不是超連結 |
+| **超連結僅供外部** | `[文字](siyuan://blocks/ID)` 不建立關聯，僅供從外部跳轉 |
+| **首次出現時引用** | 同一篇筆記中，同一個引用只嵌一次（首次出現時） |
+| **多引用不怕** | 被多處引用的塊，反向連結面板自然形成知識索引 |
+| **預設用單引號** | `'動態錨文字'` 隨原文變化，是思源原生慣例 |
+
+### API 操作
+
+建立引用不需要特殊 API — 直接在 markdown 內容中寫 `((<id> '文字'))` 即可，思源渲染時自動解析。
+
+---
+
+## 3) 標籤系統
+
+標籤用於標記內容塊，所有打過標籤的塊會在標籤面板（`Alt+4` / `⌃4`）中列出。
+
+### 語法
+
 ```markdown
-- [維運客戶](siyuan://blocks/20250108190236-49uy54d)
-- [SOP文件](siyuan://blocks/20250320164549-8nwn7q7)
+#標籤名#                  ← 基本標籤（前後都要 #）
+#分類/子分類#              ← 層級標籤（用 / 分隔）
+#工具/LibreNMS#           ← 範例：工具類層級標籤
 ```
 
-### 母文件標準模板
-
-有子文件的母文件，本身應作為「目錄/摘要」頁。標準模板：
+### 常見錯誤
 
 ```markdown
-## 摘要
-- 主要內容/業務說明
-- 負責人：（待補）
-
-## 快速入口
-- [最新/常用項目](siyuan://blocks/ID)
-
-## 目錄
-### 分類一
-- [項目](siyuan://blocks/ID)
-
-### 分類二
-- [項目](siyuan://blocks/ID)
+❌ `#Docker#`             → 行內代碼，不會變成標籤
+❌ #Docker                → 缺少結尾 #
+❌ # Docker#              → # 後有空格，變成 Markdown 標題
+✅ #Docker#               → 正確
+✅ 這是內容 #Task#        → 正確，標籤可以跟在文字後面
+✅ #工具/Docker#          → 正確，層級標籤
 ```
+
+### 最佳實踐
+
+| 原則 | 說明 |
+|---|---|
+| **標籤 ≠ 分類** | 分類靠筆記本/資料夾，標籤是輔助索引 |
+| **標籤回答「是什麼」** | 描述內容性質（事件、學習、SOP），不是位置 |
+| **層級標籤更精準** | `#工具/LibreNMS#` 比 `#LibreNMS#` 更好，可按層級瀏覽 |
+| **每則筆記至少一個** | 確保所有內容可透過標籤面板找到 |
+
+### API 操作
+
+```bash
+# 查詢所有標籤
+POST /api/search/getTags  {}
+
+# SQL 查詢帶特定標籤的塊
+SELECT * FROM blocks WHERE tag LIKE '%標籤名%'
+```
+
+---
+
+## 4) 屬性系統
+
+每個塊都可以附加屬性（key-value），用於分類、過濾、模板化。
+
+### 內建屬性
+
+| 屬性 | 說明 |
+|---|---|
+| `id` | 塊的唯一識別碼 |
+| `updated` | 最後更新時間（YYYYMMDDHHmmss） |
+| `type` | 塊類型（d/h/p/l/i/b/c/t/s...） |
+| `name` | 塊命名（可搜尋） |
+| `alias` | 塊別名（多個，逗號分隔） |
+| `memo` | 塊備註 |
+| `bookmark` | 書籤標記 |
+
+### 自訂屬性
+
+以 `custom-` 開頭的屬性可自由定義：
+
+```markdown
+{: custom-priority="high" custom-status="in-progress" }
+```
+
+### API 操作
+
+```bash
+# 設定屬性
+POST /api/attr/setBlockAttrs
+{ "id": "<block_id>", "attrs": { "custom-priority": "high" } }
+
+# 讀取屬性
+POST /api/attr/getBlockAttrs
+{ "id": "<block_id>" }
+
+# SQL 查詢有特定屬性的塊
+SELECT * FROM attributes WHERE name = 'custom-priority' AND value = 'high'
+```
+
+---
+
+## 5) 嵌入塊（Query Embed）
+
+用 SQL 動態查詢並嵌入其他塊的內容，保持即時更新。
+
+### 語法
+
+在思源中用 `{{ }}` 包裹 SQL：
+
+```sql
+{{ SELECT * FROM blocks WHERE tag LIKE '%會議%' AND created >= '20260201' ORDER BY created DESC LIMIT 10 }}
+```
+
+### 常用場景
+
+| 場景 | SQL 範例 |
+|---|---|
+| 列出所有待辦 | `SELECT * FROM blocks WHERE markdown LIKE '%- [ ]%' AND type='i'` |
+| 某標籤的所有筆記 | `SELECT * FROM blocks WHERE tag LIKE '%工具/LibreNMS%' AND type='d'` |
+| 最近更新的文件 | `SELECT * FROM blocks WHERE type='d' ORDER BY updated DESC LIMIT 20` |
+| 某筆記本下的文件 | `SELECT * FROM blocks WHERE type='d' AND box='<notebook_id>'` |
+
+---
+
+## 6) SQL 查詢技巧
+
+思源內建 SQLite 資料庫，可透過 API 查詢。
+
+### 主要資料表
+
+| 表 | 用途 |
+|---|---|
+| `blocks` | 所有內容塊（最常用） |
+| `attributes` | 塊的自訂屬性 |
+| `refs` | 引用關係（正向連結） |
+| `spans` | 行內元素（標籤、引用等） |
+
+### blocks 表重要欄位
+
+| 欄位 | 說明 |
+|---|---|
+| `id` | 塊 ID |
+| `root_id` | 所屬文件的 ID |
+| `box` | 所屬筆記本 ID |
+| `type` | 塊類型（d/h/p/l/i...） |
+| `content` | 純文字內容（去除格式） |
+| `markdown` | Markdown 原文 |
+| `tag` | 標籤（含 #） |
+| `hpath` | 人類可讀路徑（`/資料夾/文件名`） |
+| `path` | 檔案路徑（含 ID） |
+| `created` | 建立時間（YYYYMMDDHHmmss） |
+| `updated` | 更新時間 |
+
+### 常用查詢
+
+```sql
+-- 搜尋文件標題
+SELECT id, content, hpath FROM blocks WHERE type='d' AND content LIKE '%關鍵字%'
+
+-- 搜尋含特定標籤的塊
+SELECT * FROM blocks WHERE tag LIKE '%工具/LibreNMS%'
+
+-- 查某文件的所有子塊
+SELECT * FROM blocks WHERE root_id = '<doc_id>' ORDER BY sort
+
+-- 查引用某塊的所有來源
+SELECT * FROM refs WHERE def_block_id = '<block_id>'
+
+-- 查某筆記本下最近更新的文件
+SELECT id, content, updated FROM blocks 
+WHERE type='d' AND box='<notebook_id>' 
+ORDER BY updated DESC LIMIT 10
+
+-- 查某文件下的標題結構
+SELECT id, content, type, subType FROM blocks 
+WHERE root_id = '<doc_id>' AND type = 'h'
+```
+
+### API 呼叫
+
+```bash
+POST /api/query/sql
+{ "stmt": "SELECT id, content FROM blocks WHERE type='d' AND content LIKE '%關鍵字%' LIMIT 10" }
+```
+
+⚠️ **注意**：SQL 查詢有索引延遲，文件操作後幾秒到幾十秒才更新。需要即時性的用 `listDocsByPath`。
+
+---
+
+## 7) REST API 常用端點
+
+### 文件操作
+
+| 端點 | 用途 | 注意 |
+|---|---|---|
+| `POST /api/filetree/createDocWithMd` | 建立文件 | `path` 最後一段自動成為標題（H1），markdown 不要再加 `# 標題` |
+| `POST /api/filetree/removeDoc` | 刪除文件 | ⚠️ 會遞歸刪除所有子文件 |
+| `POST /api/filetree/listDocsByPath` | 列出資料夾內容 | 即時性好，不受索引延遲影響 |
+| `POST /api/filetree/renameDoc` | 重新命名 | |
+| `POST /api/filetree/moveDoc` | 移動文件 | |
+
+### 塊操作
+
+| 端點 | 用途 | 注意 |
+|---|---|---|
+| `POST /api/block/appendBlock` | 追加塊到文件末尾 | 最常用的寫入方式 |
+| `POST /api/block/insertBlock` | 在指定位置插入塊 | |
+| `POST /api/block/updateBlock` | 更新塊內容 | |
+| `POST /api/block/deleteBlock` | 刪除塊 | ⚠️ 對 doc 類型無效，刪文件用 `removeDoc` |
+| `POST /api/block/getChildBlocks` | 取得子塊列表 | |
+| `POST /api/block/getBlockKramdown` | 取得塊的 Kramdown 原文 | |
+
+### 搜尋與查詢
+
+| 端點 | 用途 |
+|---|---|
+| `POST /api/query/sql` | SQL 查詢 |
+| `POST /api/search/fullTextSearchBlock` | 全文搜尋 |
+| `POST /api/search/getTags` | 列出所有標籤 |
+
+### 屬性
+
+| 端點 | 用途 |
+|---|---|
+| `POST /api/attr/setBlockAttrs` | 設定屬性 |
+| `POST /api/attr/getBlockAttrs` | 讀取屬性 |
+
+### 匯出
+
+| 端點 | 用途 |
+|---|---|
+| `POST /api/export/exportMdContent` | 匯出文件為 Markdown |
+
+### 請求格式
+
+所有 API 都是 POST + JSON，需要 Authorization header：
+
+```
+POST http://<host>:6806/api/<endpoint>
+Authorization: Token <your_token>
+Content-Type: application/json
+```
+
+---
+
+## 8) 踩坑筆記
+
+| 問題 | 解法 |
+|---|---|
+| `createDocWithMd` 產生重複 H1 | `path` 最後一段自動成為標題，markdown 不要再寫 `# 標題` |
+| `createDocWithMd` 每次 3-5 秒 | 批量建檔分批（10-20 個一組），預留 timeout |
+| `removeDocs` 遞歸刪除 | 使用前確認沒有重要子文件 |
+| SQL 索引延遲 | 文件操作後幾秒到幾十秒才能查到，用 `listDocsByPath` 即時查 |
+| `deleteBlock` 對 doc 無效 | 刪文件只能用 `removeDoc` / `removeDocs` |
+| 標籤缺少結尾 `#` | 寫入時確保 `#標籤名#` 格式完整 |
+| mcporter stdio 偶爾卡住 | 直接用 REST API 更穩定 |
+
+---
+
+## 9) 筆記設計原則
 
 ### 結構原則
 
 | 原則 | 說明 |
-|------|------|
-| **混合式分類** | 客戶專屬 → 客戶資料夾；可共用 → 抽到 SOP/教育訓練 |
-| **母文件 = 目錄/摘要** | 有子文件的母文件，本身要能輸入內容，作為入口頁 |
-| **索引放母文件** | 索引內容直接放在母文件，不額外開子文件 |
-| **單一索引頁** | 每個筆記本只需一個總索引，整合所有入口 |
+|---|---|
+| **內容從 `##` 開始** | 文件標題自動產生 H1，內容用 H2 起 |
+| **母文件 = 索引頁** | 有子文件的母文件作為目錄/摘要入口 |
+| **一個筆記一個主題** | 拆分比合併好，靠引用建立關聯 |
+| **純 Markdown** | 不使用特殊格式，確保可攜性 |
 
-### 內容格式
-
-| 原則 | 說明 |
-|------|------|
-| **純 Markdown** | 不使用特殊格式 |
-| **TODO 用 checkbox** | `- [ ]` 待辦 / `- [x]` 完成 |
-| **不重複 H1** | 思源自動產生 H1（標題），內容從 `##` 開始。`createDocWithMd` API 會自動把文件名當 H1，所以 markdown 內容**不要再寫 `# 標題`**，否則會出現兩個 H1 |
-| **多行內容用 content_file** | 避免 `\n` 字面化問題 |
-
-### 清理與歸檔
+### 關聯建立原則
 
 | 原則 | 說明 |
-|------|------|
-| **未命名/重複 → `_duplicates`** | 集中暫放，不直接刪除 |
-| **散落文件 → 歸位** | 根層的文件移到對應分類下 |
-| **整理前先快照** | 可回滾 |
-| **歸檔需確認** | 不自動刪除，等使用者確認 |
+|---|---|
+| **多連結** | 寧可多引用，不要孤島筆記 |
+| **行內引用** | 在文字中自然嵌入 `(())`，不影響閱讀 |
+| **雙向價值** | 每次引用都同時建立正向和反向連結 |
+| **Daily Note 是樞紐** | 每日紀錄連結到各筆記，形成時間軸索引 |
 
 ### 索引頁設計規範
 
-**設計原則：**
-1. **引用塊開頭**：`> 💼 筆記本名稱` 作為視覺提示
-2. **Emoji 標題**：例如 🚀 快速入口、📂 結構、📌 其他…
-3. **表格化入口**：用表格呈現「分類／說明」，提高可讀性
-4. **可點擊連結**：一律使用 `[名稱](siyuan://blocks/ID)`
-5. **分隔線區分段落**：用 `---` 分隔不同區塊
-6. **結構說明**：用 code block 呈現目錄樹，協助理解整體架構
+**標準區塊順序：**
+1. 引用塊提示（`> 💼 筆記本名稱`）
+2. 🚀 快速入口（表格化）
+3. 🔥 近期活躍（如適用）
+4. 📋 速查表（如適用）
+5. 📂 結構說明（目錄樹）
 
-**標準區塊順序（建議）：**
-1. 引用塊提示（筆記本名稱 + emoji）
-2. 🚀 快速入口（主要分類表格）
-3. 🔥 近期活躍 / 常用項目（如適用）
-4. 📋 速查表（如 SOP）
-5. 📌 其他常用連結
-6. 📂 結構說明（目錄樹）
-7. 使用規則 / 分類原則
-
-**極簡範例：**
+**母文件模板：**
 ```markdown
-> 💼 筆記本名稱
+> 💼 筆記本名稱 / 分類
 
 ## 🚀 快速入口
 
-| 分類 | 說明 |
-|------|------|
-| [維運客戶](siyuan://blocks/ID) | 客戶專屬資料 |
-| [SOP文件](siyuan://blocks/ID) | 標準作業流程 |
+| 項目 | 說明 |
+|---|---|
+| ((<id> '項目A')) | 說明 |
+| ((<id> '項目B')) | 說明 |
 
 ---
 
 ## 📂 結構
 
-```
-筆記本/
-├─ 索引
-├─ 分類A/
-└─ 分類B/
-```
+- ((<id> '子分類1'))
+- ((<id> '子分類2'))
 ```
 
----
+### 清理原則
 
-## 5) 常見注意事項
-
-### ⚠️ 多行內容傳遞（重要！）
-
-當你用 `mcporter call` 傳遞多行 Markdown 內容時，**不要**直接在參數裡寫 `\n`，會變成字面文字。
-
-**❌ 錯誤寫法**（會變成 `\n` 字面文字）：
-```bash
-mcporter call siyuan.update_document document_id="xxx" content="# 標題\n\n內容"
-```
-
-**✅ 最推薦：用 `content_file`（避免所有 shell 轉義問題）**
-```bash
-cat << 'EOF' > /tmp/content.md
-# 標題
-
-這是內容。
-
-## 小節
-- 項目 1
-- 項目 2
-EOF
-
-mcporter call siyuan.update_document document_id="xxx" content_file="/tmp/content.md"
-```
-
-**✅ 其他可用寫法 1**：先寫入檔案再用 `$(cat ...)` 帶入
-```bash
-mcporter call siyuan.update_document document_id="xxx" content="$(cat /tmp/content.md)"
-```
-
-**✅ 其他可用寫法 2**：用 `$'...'` 語法（bash）
-```bash
-mcporter call siyuan.update_document document_id="xxx" content=$'# 標題\n\n這是內容。'
-```
-
-**✅ 其他可用寫法 3**：直接用多行引號
-```bash
-mcporter call siyuan.update_document document_id="xxx" content="# 標題
-
-這是內容。
-
-## 小節
-- 項目 1
-- 項目 2
-"
-```
-
-### 標籤格式（重要！）
-
-思源筆記的標籤語法是 **`#標籤名#`**（前後都要 `#`），否則不會被系統識別。
-
-**寫入時的正確方式：**
-
-```bash
-# 在內容中直接寫裸文字標籤（不要用反引號包裹）
-mcporter call siyuan.append_to_daily_note \
-  notebook_id="20260205161632-m9mibni" \
-  content="* **14:30** | 處理 VPN 問題 #Incident# #Docker#"
-```
-
-```bash
-# 用 content_file 寫入時也一樣，直接寫裸文字
-cat << 'EOF' > /tmp/note.md
-## 處理紀錄
-
-排查了 K8s 網路問題。 #Incident# #Kubernetes#
-
-### 解決方案
-重啟了 CoreDNS pod。 #Snippet#
-EOF
-
-mcporter call siyuan.append_to_document \
-  document_id="xxx" content_file="/tmp/note.md"
-```
-
-**常見錯誤：**
-
-```markdown
-❌ `#Docker#`        → 行內代碼，不會變成標籤
-❌ #Docker           → 缺少結尾 #，不會生效
-❌ # Docker#         → # 後有空格，變成 Markdown 標題
-✅ #Docker#          → 正確，會被識別為標籤
-✅ 這是內容 #Task#   → 正確，標籤可以跟在文字後面
-```
-
-**查詢現有標籤：**
-
-```bash
-mcporter call siyuan.list_all_tags
-```
-
-**批次替換標籤（合併同義標籤時使用）：**
-
-```bash
-mcporter call siyuan.batch_replace_tag old_tag="容器" new_tag="Docker"
-```
-
-### 其他注意事項
-
-- 若工具列表讀不到，先確認：
-  - `SIYUAN_TOKEN`、`SIYUAN_BASE_URL` 是否正確
-  - 思源是否在該 baseUrl 啟動
-  - mcporter 是否已設定 `siyuan`
-
-- 若要看所有 tools：
-
-```bash
-mcporter list siyuan --all-parameters
-```
+| 原則 | 說明 |
+|---|---|
+| **整理前先快照** | `POST /api/repo/createSnapshot` |
+| **不自動刪除** | 歸檔需使用者確認 |
+| **重複文件暫放** | 移到 `_duplicates` 資料夾，不直接刪 |

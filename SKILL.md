@@ -283,6 +283,54 @@ POST /api/query/sql
 | `POST /api/block/getChildBlocks` | 取得子塊列表 | |
 | `POST /api/block/getBlockKramdown` | 取得塊的 Kramdown 原文 | |
 
+### 插入到正確位置（`insertBlock` 定位指南）
+
+**核心概念：heading 下的所有內容塊，`parent_id = heading_id`**
+
+不管是普通文件，還是 `{{{col}}}` / `{{{row}}}` 三欄 superblock 裡的 heading，content（list/paragraph）都是以 **heading 本身**為父節點，不是 heading 的父容器。
+
+**標準查法：找 section 最後一個 list block**
+
+```sql
+-- Step 1：找目標 heading
+SELECT id FROM blocks
+WHERE root_id = '<doc_id>' AND type = 'h' AND content LIKE '%關鍵字%'
+LIMIT 1
+
+-- Step 2：找該 heading 下最後一個 list block
+SELECT id FROM blocks
+WHERE parent_id = '<heading_id>' AND type = 'l'
+ORDER BY sort DESC LIMIT 1
+```
+
+**插入決策：**
+
+| 情況 | previousID |
+|---|---|
+| heading 下有 list block | 用 list block 的 id |
+| **heading 下是空的（無結果）** | **用 heading_id 本身** |
+
+```json
+POST /api/block/insertBlock
+{ "dataType": "markdown", "data": "- 新內容", "previousID": "<上方決定的 ID>" }
+```
+
+> ⚠️ **不要用 `appendBlock`**——它追加到整個文件末尾，不是 heading 下方。
+
+**`{{{col}}}` / `{{{row}}}` 三欄結構說明：**
+
+```
+{{{col                    ← col superblock（root_id 的直接子塊）
+  {{{row                  ← row superblock（col 的子塊）
+    ### ⏰ 重點工作        ← heading（row 的子塊）
+    ---                   ← divider（row 的子塊）
+    - [ ] 待辦項目        ← list（heading 的子塊！不是 row 的子塊）
+  }}}
+}}}
+```
+
+→ 要插入到某一欄，找該欄的 heading_id，再用上方查法找 previousID。
+
 ### 搜尋與查詢
 
 | 端點 | 用途 |
@@ -328,6 +376,9 @@ Content-Type: application/json
 | 標籤缺少結尾 `#` | 寫入時確保 `#標籤名#` 格式完整 |
 | mcporter stdio 偶爾卡住 | 直接用 REST API 更穩定 |
 | `setNotebookIcon` 要用 hex code | 用 `1f4bc`（💼）不是 emoji 字元，跟用戶指南格式一致 |
+| `appendBlock` 追加到文件末尾 | 想插入到特定 heading 下方，要用 `insertBlock` + `previousID`（指定前一個塊的 ID） |
+| **heading 下的 content 是 heading 的子塊** | `parent_id = heading_id`，不是 heading 的父容器；這對普通文件和 `{{{col}}}` 三欄結構都成立 |
+| 找 section 最後一個塊 | `SELECT id FROM blocks WHERE parent_id='<heading_id>' AND type='l' ORDER BY sort DESC LIMIT 1`；若無結果（section 空）→ 用 `heading_id` 當 `previousID` |
 
 ---
 
